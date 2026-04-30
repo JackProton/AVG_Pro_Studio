@@ -3,6 +3,8 @@ import os
 import sys
 import json
 import re
+import io         # 👈 新增：用于在内存中处理文件打包
+import zipfile    # 👈 新增：用于生成压缩包下载
 
 sys.path.append(os.path.abspath("src"))
 from my_avg_studio.manager import ProjectManager
@@ -14,26 +16,21 @@ pm = ProjectManager()
 # --- 核心辅助函数：提取章节清单 ---
 def parse_chapter_list(text):
     if not text: return ["默认章节"]
-    # 1. 粗暴清除大模型喜欢加的 Markdown 星号
     clean_text = text.replace('*', '')
-    # 2. 抓取【章节清单】后面的所有内容，直到遇到连续两个换行或结尾
     match = re.search(r'【章节清单】[：:]?\s*([\s\S]+?)(?=\n\n|$)', clean_text)
     if match:
         raw_str = match.group(1).strip()
-        # 3. 兼容逗号、顿号，甚至列表换行符的分隔
         chapters = [c.strip() for c in re.split(r'[,，、|\n]', raw_str) if c.strip()]
-        # 4. 清除可能附带的列表符号 (如 "- 序章" 变成 "序章")
         chapters = [re.sub(r'^[-*]\s*', '', c) for c in chapters if c.strip()]
         if chapters:
             return chapters
     return ["默认章节"]
 
-# 🔒 UI 锁定回调函数 (防止多线程并发死锁)
+# 🔒 UI 锁定回调函数
 def lock_ui():
     st.session_state.is_processing = True
 
-# 🌟 核心修复：特权跳转回调函数 (丝滑进入下一章)
-# 🌟 核心修复：特权跳转回调函数 (丝滑进入下一章，带安全解锁)
+# 🌟 特权跳转回调函数 (丝滑进入下一章，带安全解锁)
 def next_chapter_callback():
     st.session_state.is_processing = True
     try:
@@ -68,6 +65,7 @@ def next_chapter_callback():
 
 # --- 初始化会话状态 (State Machine) ---
 if 'current_step' not in st.session_state: st.session_state.current_step = 0  
+if 'error_msg' not in st.session_state: st.session_state.error_msg = None
 if 'project_name' not in st.session_state: st.session_state.project_name = "Project_Zero"
 if 'active_chapter' not in st.session_state: st.session_state.active_chapter = "默认章节"
 if 'is_processing' not in st.session_state: st.session_state.is_processing = False
@@ -201,6 +199,33 @@ with st.sidebar:
         st.session_state.active_chapter = "默认章节"
         st.rerun()
 
+    # === 🌟 核心新增：侧边栏最下方的本地打包下载模块 ===
+    st.divider()
+    st.header("💾 本地防丢失备份")
+    st.info("⚠️ 云端数据会在关闭网页后清空，请务必在收工前下载存档！")
+    
+    if st.session_state.project_name not in ["Project_Zero", "New_Project"]:
+        proj_dir = pm.get_project_path(st.session_state.project_name)
+        if os.path.exists(proj_dir) and os.listdir(proj_dir):
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for root, _, files in os.walk(proj_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, start=proj_dir)
+                        zip_file.write(file_path, arcname)
+            zip_buffer.seek(0)
+            st.download_button(
+                label=f"📦 下载【{st.session_state.project_name}】全套资产",
+                data=zip_buffer,
+                file_name=f"{st.session_state.project_name}_backup.zip",
+                mime="application/zip",
+                use_container_width=True,
+                type="primary"
+            )
+        else:
+            st.caption("当前项目暂无生成的数据文件。")
+
 # ==========================================
 # 主界面头部：全局进度可视化
 # ==========================================
@@ -217,6 +242,12 @@ for i, name in enumerate(step_names):
 st.progress(st.session_state.current_step / (len(step_names) - 1))
 st.divider()
 
+# --- 🌟 核心新增：全局错误提示展示区 ---
+if st.session_state.error_msg:
+    st.error(st.session_state.error_msg)
+    # 阅后即焚：显示完立刻清空。
+    st.session_state.error_msg = None
+
 cfg = st.session_state.session_config
 engine = AvgEngine(cfg) if cfg.get("api_key") else None
 
@@ -230,8 +261,10 @@ if st.session_state.current_step == 0:
     
     if st.button("🚀 召唤策划总管生成大纲", type="primary", on_click=lock_ui, disabled=st.session_state.is_processing):
         try:
-            if not engine: st.error("请先配置 API Key！")
-            elif not topic: st.warning("请输入企划概念。")
+            if not engine: 
+                st.session_state.error_msg = "请先在左侧配置 API Key！"
+            elif not topic: 
+                st.session_state.error_msg = "请输入企划概念。"
             else:
                 st.session_state.project_name = project_name_input
                 p_path = pm.get_project_path(project_name_input)
@@ -243,8 +276,10 @@ if st.session_state.current_step == 0:
                     st.session_state.active_chapter = st.session_state.chapter_list[0] if st.session_state.chapter_list else "默认章节"
                     st.session_state.current_step = 1
         except Exception as e:
-            st.error(f"引擎运行报错: {e}")
+            # ✅ 把错误存进信使
+            st.session_state.error_msg = f"引擎运行报错: {e}"
         finally:
+            # ✅ 安全闭环：永远解锁，永远刷新
             st.session_state.is_processing = False
             st.rerun()
 
@@ -268,8 +303,10 @@ elif st.session_state.current_step == 1:
                     st.session_state.script_content = result
                     st.session_state.current_step = 2
             except Exception as e:
-                st.error(f"引擎运行报错: {e}")
+                # ✅ 把错误存进信使
+                st.session_state.error_msg = f"引擎运行报错: {e}"
             finally:
+                # ✅ 安全闭环
                 st.session_state.is_processing = False
                 st.rerun()
     with col2:
@@ -291,15 +328,16 @@ elif st.session_state.current_step == 2:
             try:
                 st.session_state.script_content = edited_script
                 with st.spinner("后台正在极速生成底层逻辑节点 (约 20-30 秒)..."):
-                    # 👈 这里改成只调用 step_3_generate_logic (你需要去 engine 拆分一下函数)
                     result, _ = engine.step_3_generate_logic(
                         st.session_state.active_chapter, st.session_state.script_content, st.session_state.current_project_path
                     )
                     st.session_state.logic_content = result
                     st.session_state.current_step = 3
             except Exception as e:
-                st.error(f"引擎运行报错: {e}")
+                # ✅ 把错误存进信使
+                st.session_state.error_msg = f"引擎运行报错: {e}"
             finally:
+                # ✅ 安全闭环
                 st.session_state.is_processing = False
                 st.rerun()
     with col2:
@@ -331,7 +369,6 @@ elif st.session_state.current_step == 3:
                 if st.button("🕵️ 召唤 QA 审核员查杀逻辑死锁", type="primary", on_click=lock_ui, disabled=st.session_state.is_processing):
                     try:
                         with st.spinner("QA 正在交叉比对剧本与代码 (约 30 秒)..."):
-                            # 调用专门的 QA 函数
                             result, _ = engine.step_5_run_qa(
                                 st.session_state.active_chapter, 
                                 st.session_state.script_content, 
@@ -339,6 +376,8 @@ elif st.session_state.current_step == 3:
                                 st.session_state.current_project_path
                             )
                             st.session_state.qa_report = result
+                    except Exception as e:
+                        st.session_state.error_msg = f"引擎运行报错: {e}"
                     finally:
                         st.session_state.is_processing = False
                         st.rerun()
@@ -355,7 +394,7 @@ elif st.session_state.current_step == 3:
                             )
                             st.session_state.asset_content = result
                     except Exception as e:
-                        st.error(f"引擎运行报错: {e}")
+                        st.session_state.error_msg = f"引擎运行报错: {e}"
                     finally:
                         st.session_state.is_processing = False
                         st.rerun()
