@@ -83,9 +83,9 @@ AVG-Pro-Studio/
 └── src/
     └── my_avg_studio/
         ├── manager.py      # 项目文件 I/O 与配置读取
-        ├── engine.py       # LLM 双擎调度与 Agent 任务编排
+        ├── engine.py       # LLM 调度与 Agent 任务编排
         └── config/
-            ├── agents.yaml # 六大 Agent 的人设与核心提示词
+            ├── agents.yaml # Agent 的人设与核心提示词
             └── tasks.yaml  # 流水线任务指令与输出格式约束
 ```
 
