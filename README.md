@@ -51,7 +51,7 @@ pip install -r requirements.txt
 ```json
 {
   "api_key": "sk-你的真实API密钥",
-  "base_url": "[https://api.deepseek.com](https://api.deepseek.com)",
+  "base_url": "官方或中转api地址",
   "model": "deepseek-4"
 }
 ```
